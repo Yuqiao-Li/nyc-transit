@@ -623,6 +623,135 @@ class DataService:
         except Exception as e:
             return {"error": f"Failed to load shape data: {str(e)}"}
 
+    def get_line(self, line_id):
+        """
+        Get geographic coordinates for a specific line
+
+        Args:
+            line_id (str or int): Line ID
+
+        Returns:
+            list: List of coordinate points along the line
+        """
+        # Check cache
+        cache_key = f"line_{line_id}"
+        cached_data = cache.get(cache_key, self.get_cache_timeout('lines', line_id))
+        if cached_data:
+            return cached_data
+
+        try:
+            # Initialize empty result list
+            coordinates = []
+
+            # Path to GTFS files
+            trips_file = os.path.join('data', 'gtfs_subway', 'trips.txt')
+            shapes_file = os.path.join('data', 'gtfs_subway', 'shapes.txt')
+            stops_file = os.path.join('data', 'gtfs_subway', 'stops.txt')
+            stop_times_file = os.path.join('data', 'gtfs_subway', 'stop_times.txt')
+
+            # Check if files exist
+            if not os.path.exists(trips_file) or not os.path.exists(shapes_file):
+                print(
+                    f"Missing required files: trips={os.path.exists(trips_file)}, shapes={os.path.exists(shapes_file)}")
+                return {"error": "GTFS data files not found"}
+
+            # Step 1: Find a shape_id for this route from trips.txt
+            shape_ids = set()
+            with open(trips_file, 'r', encoding='utf-8') as f:
+                reader = csv.DictReader(f)
+                for row in reader:
+                    if row['route_id'] == line_id and 'shape_id' in row:
+                        shape_ids.add(row['shape_id'])
+
+            # Step 2: If we found a shape_id, get coordinates from shapes.txt
+            if shape_ids:
+                print(f"Found {len(shape_ids)} shape_ids for route {line_id}")
+
+                # Get the first shape_id (could get multiple or pick longest)
+                primary_shape_id = list(shape_ids)[0]
+
+                # Get all points for this shape
+                shape_points = []
+                with open(shapes_file, 'r', encoding='utf-8') as f:
+                    reader = csv.DictReader(f)
+                    for row in reader:
+                        if row['shape_id'] == primary_shape_id:
+                            shape_points.append({
+                                'lat': float(row['shape_pt_lat']),
+                                'lng': float(row['shape_pt_lon']),
+                                'sequence': int(row['shape_pt_sequence'])
+                            })
+
+                # Sort by sequence
+                shape_points.sort(key=lambda p: p['sequence'])
+
+                # Create coordinates list (without sequence)
+                coordinates = [{'lat': p['lat'], 'lng': p['lng']} for p in shape_points]
+
+                print(f"Found {len(coordinates)} points for shape {primary_shape_id}")
+
+            # Step 3: If no shape data, use stops
+            if not coordinates:
+                print(f"No shape data for route {line_id}, using stops")
+
+                # Get trip_ids for this route
+                trip_ids = set()
+                with open(trips_file, 'r', encoding='utf-8') as f:
+                    reader = csv.DictReader(f)
+                    for row in reader:
+                        if row['route_id'] == line_id:
+                            trip_ids.add(row['trip_id'])
+
+                # If we have trips, get stops for them
+                if trip_ids:
+                    # Get the first trip_id to use (could pick something more representative)
+                    primary_trip_id = list(trip_ids)[0]
+
+                    # Get stop_ids for this trip
+                    stop_sequence = []
+                    with open(stop_times_file, 'r', encoding='utf-8') as f:
+                        reader = csv.DictReader(f)
+                        for row in reader:
+                            if row['trip_id'] == primary_trip_id:
+                                stop_sequence.append({
+                                    'stop_id': row['stop_id'],
+                                    'sequence': int(row['stop_sequence'])
+                                })
+
+                    # Sort by sequence
+                    stop_sequence.sort(key=lambda s: s['sequence'])
+
+                    # Get coordinates for these stops
+                    stop_dict = {}
+                    with open(stops_file, 'r', encoding='utf-8') as f:
+                        reader = csv.DictReader(f)
+                        for row in reader:
+                            stop_dict[row['stop_id']] = {
+                                'lat': float(row['stop_lat']),
+                                'lng': float(row['stop_lon'])
+                            }
+
+                    # Create coordinates list from stops
+                    for stop in stop_sequence:
+                        if stop['stop_id'] in stop_dict:
+                            coordinates.append(stop_dict[stop['stop_id']])
+
+                    print(f"Created line from {len(coordinates)} stops")
+
+            # Cache and return results
+            if coordinates:
+                cache.set(cache_key, coordinates)
+                return coordinates
+            else:
+                return {"error": f"No data found for line {line_id}"}
+
+        except Exception as e:
+            import traceback
+            print(f"Error in get_line: {str(e)}")
+            print(traceback.format_exc())
+            return {"error": f"Failed to load line data: {str(e)}"}
+
+
     def get_stops_for_route(self, route_id):
         """
         Get all stops for a specific route
