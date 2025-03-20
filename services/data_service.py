@@ -1,5 +1,12 @@
 import requests
 import datetime
+import csv
+import os
+import json
+import pyproj
+from shapely.geometry import LineString
+from shapely.ops import transform
+import functools
 from google.transit import gtfs_realtime_pb2
 from config import (
     SUBWAY_FEEDS, LIRR_FEEDS, MNR_FEEDS,
@@ -11,39 +18,39 @@ from utils.cache import cache
 
 class DataService:
     """
-    数据服务类 - 处理所有数据获取和处理
+    Data service - handles all data retrieval and processing
     """
 
     def get_cache_timeout(self, category, item_id):
         """
-        获取特定项目的缓存超时时间
+        Get cache timeout for a specific item
 
         Args:
-            category (str): 类别 ('subway', 'lirr', 'mnr', 'alerts', 'accessibility')
-            item_id (str): 项目ID
+            category (str): Category ('subway', 'lirr', 'mnr', 'alerts', 'accessibility')
+            item_id (str): Item ID
 
         Returns:
-            int: 缓存超时时间(秒)
+            int: Cache timeout in seconds
         """
-        # 先检查是否有特定项目的超时设置
+        # Check for item-specific timeout
         specific_key = f"{item_id}"
         if specific_key in CACHE_TIMEOUT:
             return CACHE_TIMEOUT[specific_key]
 
-        # 然后检查是否有特定类别的默认超时设置
+        # Check for category default timeout
         category_key = f"{category}_default"
         if category_key in CACHE_TIMEOUT:
             return CACHE_TIMEOUT[category_key]
 
-        # 最后返回全局默认值
-        return 60  # 默认1分钟
+        # Return global default
+        return 60  # Default 1 minute
 
     def get_available_feeds(self):
         """
-        获取所有可用的数据源
+        Get all available data feeds
 
         Returns:
-            dict: 数据源类型和ID的字典
+            dict: Dictionary of feed types and IDs
         """
         return {
             "subway": list(SUBWAY_FEEDS.keys()),
@@ -55,30 +62,30 @@ class DataService:
 
     def get_subway_feeds(self):
         """
-        获取所有可用的地铁数据源
+        Get all available subway feeds
 
         Returns:
-            dict: 地铁数据源ID和URL的字典
+            dict: Dictionary of subway feed IDs and URLs
         """
         return SUBWAY_FEEDS
 
     def parse_gtfs_rt(self, content, feed_id):
         """
-        解析GTFS-RT数据
+        Parse GTFS-RT data
 
         Args:
-            content (bytes): GTFS-RT二进制内容
-            feed_id (str): 数据源ID
+            content (bytes): GTFS-RT binary content
+            feed_id (str): Feed ID
 
         Returns:
-            dict: 解析后的数据
+            dict: Parsed data
         """
         try:
-            # 解析GTFS-RT数据
+            # Parse GTFS-RT data
             feed = gtfs_realtime_pb2.FeedMessage()
             feed.ParseFromString(content)
 
-            # 转换为可JSON化的格式
+            # Convert to JSON-serializable format
             result = {
                 "header": {
                     "timestamp": feed.header.timestamp,
@@ -88,11 +95,11 @@ class DataService:
                 "entities": []
             }
 
-            # 处理每个实体(车辆、行程更新、提醒等)
+            # Process each entity (vehicle, trip update, alert)
             for entity in feed.entity:
                 entity_data = {"id": entity.id}
 
-                # 处理车辆位置
+                # Process vehicle positions
                 if entity.HasField('vehicle'):
                     vehicle = entity.vehicle
                     vehicle_data = {
@@ -132,7 +139,7 @@ class DataService:
 
                     entity_data["vehicle"] = vehicle_data
 
-                # 处理行程更新
+                # Process trip updates
                 if entity.HasField('trip_update'):
                     trip_update = entity.trip_update
                     update_data = {
@@ -179,7 +186,7 @@ class DataService:
 
                     entity_data["trip_update"] = update_data
 
-                # 处理提醒
+                # Process alerts
                 if entity.HasField('alert'):
                     alert = entity.alert
                     alert_data = {
@@ -187,25 +194,25 @@ class DataService:
                         "informed_entity": []
                     }
 
-                    # 添加基本信息
+                    # Add basic info
                     if alert.HasField('cause'):
                         alert_data["cause"] = alert.cause
 
                     if alert.HasField('effect'):
                         alert_data["effect"] = alert.effect
 
-                    # 处理URL
+                    # Process URL
                     if alert.HasField('url') and alert.url.translation:
                         alert_data["url"] = alert.url.translation[0].text
 
-                    # 处理标题和描述
+                    # Process title and description
                     if alert.HasField('header_text') and alert.header_text.translation:
                         alert_data["header_text"] = alert.header_text.translation[0].text
 
                     if alert.HasField('description_text') and alert.description_text.translation:
                         alert_data["description_text"] = alert.description_text.translation[0].text
 
-                    # 处理有效期
+                    # Process active periods
                     for period in alert.active_period:
                         period_data = {}
 
@@ -224,7 +231,7 @@ class DataService:
 
                         alert_data["active_period"].append(period_data)
 
-                    # 处理影响实体
+                    # Process affected entities
                     for entity in alert.informed_entity:
                         entity_info = {}
 
@@ -253,33 +260,33 @@ class DataService:
 
     def get_subway_feed(self, feed_id):
         """
-        获取特定地铁线路组的数据
+        Get data for specific subway line group
 
         Args:
-            feed_id (str): 地铁线路组ID
+            feed_id (str): Subway line group ID
 
         Returns:
-            dict: 处理后的地铁数据或错误信息
+            dict: Processed subway data or error
         """
-        # 验证feed_id
+        # Validate feed_id
         if feed_id not in SUBWAY_FEEDS:
             return {"error": f"Invalid subway feed: {feed_id}"}
 
-        # 检查缓存
+        # Check cache
         cache_key = f"subway_{feed_id}"
         cached_data = cache.get(cache_key, self.get_cache_timeout('subway', feed_id))
         if cached_data:
             return cached_data
 
-        # 获取数据
+        # Fetch data
         try:
             response = requests.get(SUBWAY_FEEDS[feed_id])
 
             if response.status_code == 200:
-                # 解析GTFS-RT数据
+                # Parse GTFS-RT data
                 result = self.parse_gtfs_rt(response.content, feed_id)
 
-                # 缓存结果
+                # Cache result
                 cache.set(cache_key, result)
                 return result
             else:
@@ -290,33 +297,33 @@ class DataService:
 
     def get_lirr_feed(self, feed_id):
         """
-        获取长岛铁路数据
+        Get LIRR data
 
         Args:
-            feed_id (str): 长岛铁路数据源ID
+            feed_id (str): LIRR feed ID
 
         Returns:
-            dict: 处理后的长岛铁路数据或错误信息
+            dict: Processed LIRR data or error
         """
-        # 验证feed_id
+        # Validate feed_id
         if feed_id not in LIRR_FEEDS:
             return {"error": f"Invalid LIRR feed: {feed_id}"}
 
-        # 检查缓存
+        # Check cache
         cache_key = f"lirr_{feed_id}"
         cached_data = cache.get(cache_key, self.get_cache_timeout('lirr', feed_id))
         if cached_data:
             return cached_data
 
-        # 获取数据
+        # Fetch data
         try:
             response = requests.get(LIRR_FEEDS[feed_id])
 
             if response.status_code == 200:
-                # 解析GTFS-RT数据
+                # Parse GTFS-RT data
                 result = self.parse_gtfs_rt(response.content, feed_id)
 
-                # 缓存结果
+                # Cache result
                 cache.set(cache_key, result)
                 return result
             else:
@@ -327,33 +334,33 @@ class DataService:
 
     def get_mnr_feed(self, feed_id):
         """
-        获取Metro-North数据
+        Get Metro-North data
 
         Args:
-            feed_id (str): Metro-North数据源ID
+            feed_id (str): Metro-North feed ID
 
         Returns:
-            dict: 处理后的Metro-North数据或错误信息
+            dict: Processed Metro-North data or error
         """
-        # 验证feed_id
+        # Validate feed_id
         if feed_id not in MNR_FEEDS:
             return {"error": f"Invalid MNR feed: {feed_id}"}
 
-        # 检查缓存
+        # Check cache
         cache_key = f"mnr_{feed_id}"
         cached_data = cache.get(cache_key, self.get_cache_timeout('mnr', feed_id))
         if cached_data:
             return cached_data
 
-        # 获取数据
+        # Fetch data
         try:
             response = requests.get(MNR_FEEDS[feed_id])
 
             if response.status_code == 200:
-                # 解析GTFS-RT数据
+                # Parse GTFS-RT data
                 result = self.parse_gtfs_rt(response.content, feed_id)
 
-                # 缓存结果
+                # Cache result
                 cache.set(cache_key, result)
                 return result
             else:
@@ -364,33 +371,32 @@ class DataService:
 
     def get_service_alerts(self, alert_type):
         """
-        获取服务提醒数据
+        Get service alerts
 
         Args:
-            alert_type (str): 提醒类型
+            alert_type (str): Alert type
 
         Returns:
-            dict: 服务提醒数据或错误信息
+            dict: Service alert data or error
         """
-        # 验证alert_type
+        # Validate alert_type
         if alert_type not in SERVICE_ALERT_FEEDS:
             return {"error": f"Invalid alert type: {alert_type}"}
 
-        # 检查缓存
+        # Check cache
         cache_key = f"alert_{alert_type}"
         cached_data = cache.get(cache_key, self.get_cache_timeout('alerts', alert_type))
         if cached_data:
             return cached_data
 
-        # 获取数据
         try:
             response = requests.get(SERVICE_ALERT_FEEDS[alert_type])
 
             if response.status_code == 200:
-                # 解析GTFS-RT数据
+                # Parse GTFS-RT data
                 result = self.parse_gtfs_rt(response.content, alert_type)
 
-                # 缓存结果
+                # Cache result
                 cache.set(cache_key, result)
                 return result
             else:
@@ -401,31 +407,31 @@ class DataService:
 
     def get_accessibility_data(self, data_type):
         """
-        获取无障碍设施数据
+        Get accessibility data
 
         Args:
-            data_type (str): 数据类型 ('current', 'upcoming', 'equipment')
+            data_type (str): Data type ('current', 'upcoming', 'equipment')
 
         Returns:
-            dict: 无障碍设施数据或错误信息
+            dict: Accessibility data or error
         """
-        # 验证数据类型
+        # Validate data type
         if data_type not in ELEVATOR_ESCALATOR_FEEDS:
             return {"error": f"Invalid accessibility data type: {data_type}"}
 
-        # 检查缓存
+        # Check cache
         cache_key = f"accessibility_{data_type}"
         cached_data = cache.get(cache_key, self.get_cache_timeout('accessibility', data_type))
         if cached_data:
             return cached_data
 
-        # 获取数据
+        # Fetch data
         try:
             response = requests.get(ELEVATOR_ESCALATOR_FEEDS[data_type])
 
             if response.status_code == 200:
                 data = response.json()
-                # 缓存结果
+                # Cache result
                 cache.set(cache_key, data)
                 return data
             else:
@@ -436,35 +442,255 @@ class DataService:
 
     def get_station_accessibility(self, station_id):
         """
-        获取特定车站的无障碍设施信息
+        Get station accessibility info
 
         Args:
-            station_id (str): 车站ID
+            station_id (str): Station ID
 
         Returns:
-            dict: 车站无障碍设施信息
+            dict: Station accessibility info
         """
-        # 获取设备信息
+        # Get equipment info
         equipment_data = self.get_accessibility_data('equipment')
 
-        # 检查是否有错误
+        # Check for errors
         if "error" in equipment_data:
             return equipment_data
 
-        # 筛选特定车站的设备
-        # 注意：这里需要根据实际的数据结构调整
+        # Filter station-specific equipment
+        # Note: Adjust based on actual data structure
         station_equipment = []
 
-        # 假设equipment_data是一个字典，包含一个equipment列表
+        # Assuming equipment_data is a dict with an equipment list
         if "equipment" in equipment_data:
             for item in equipment_data["equipment"]:
                 if item.get("station_id") == station_id:
                     station_equipment.append(item)
 
-        # 返回结果
+        # Return result
         return {
             "station_id": station_id,
             "equipment_count": len(station_equipment),
             "equipment": station_equipment
         }
 
+    def get_stations(self):
+        """
+        Get all stations data from GTFS stops.txt file
+
+        Returns:
+            list: List of station objects
+        """
+        # Check cache
+        cache_key = "stations"
+        cached_data = cache.get(cache_key, self.get_cache_timeout('stations', 'stations'))
+        if cached_data:
+            return cached_data
+
+        try:
+            # Load station data from stops.txt
+            stops_file = os.path.join('data', 'gtfs_subway', 'stops.txt')
+
+            stations = []
+
+            with open(stops_file, 'r', encoding='utf-8') as f:
+                reader = csv.DictReader(f)
+                for row in reader:
+                    # Only get stations, not entrances, platforms, etc.
+                    # In GTFS, location_type=0 or unspecified means a stop or station
+                    if row.get('location_type', '0') == '0' or not row.get('location_type'):
+                        station = {
+                            "id": row['stop_id'],
+                            "name": row['stop_name'],
+                            "lat": float(row['stop_lat']),
+                            "lng": float(row['stop_lon'])
+                        }
+                        stations.append(station)
+
+            # Cache results
+            cache.set(cache_key, stations)
+            return stations
+
+        except Exception as e:
+            return {"error": f"Failed to load stations data: {str(e)}"}
+
+    def get_routes(self):
+        """
+        Get all routes (subway lines) data
+
+        Returns:
+            list: List of route objects
+        """
+        # Check cache
+        cache_key = "routes"
+        cached_data = cache.get(cache_key, self.get_cache_timeout('routes', 'routes'))
+        if cached_data:
+            return cached_data
+
+        try:
+            # Load routes data from routes.txt
+            routes_file = os.path.join('data', 'gtfs_subway', 'routes.txt')
+
+            routes = []
+
+            with open(routes_file, 'r', encoding='utf-8') as f:
+                reader = csv.DictReader(f)
+                for row in reader:
+                    route = {
+                        "id": row['route_id'],
+                        "short_name": row['route_short_name'],
+                        "long_name": row['route_long_name'],
+                        "color": row.get('route_color', ''),
+                        "text_color": row.get('route_text_color', '')
+                    }
+                    routes.append(route)
+
+            # Cache results
+            cache.set(cache_key, routes)
+            return routes
+
+        except Exception as e:
+            return {"error": f"Failed to load routes data: {str(e)}"}
+
+    def get_line_shape(self, route_id):
+        """
+        Get shape coordinates for a specific route
+
+        Args:
+            route_id (str): Route ID
+
+        Returns:
+            list: List of coordinate points along the route
+        """
+        # Check cache
+        cache_key = f"line_shape_{route_id}"
+        cached_data = cache.get(cache_key, self.get_cache_timeout('lines', route_id))
+        if cached_data:
+            return cached_data
+
+        try:
+            # Process steps:
+            # 1. Get trips for this route from trips.txt
+            # 2. Extract shape_ids from trips
+            # 3. Get coordinates for these shapes from shapes.txt
+
+            trips_file = os.path.join('data', 'gtfs_subway', 'trips.txt')
+            shapes_file = os.path.join('data', 'gtfs_subway', 'shapes.txt')
+
+            # Get shape_ids for this route_id
+            shape_ids = set()
+            with open(trips_file, 'r', encoding='utf-8') as f:
+                reader = csv.DictReader(f)
+                for row in reader:
+                    if row['route_id'] == route_id:
+                        shape_ids.add(row['shape_id'])
+
+            if not shape_ids:
+                return {"error": f"No shapes found for route: {route_id}"}
+
+            # Get coordinates for each shape
+            shapes = {}
+            for shape_id in shape_ids:
+                shapes[shape_id] = []
+
+            with open(shapes_file, 'r', encoding='utf-8') as f:
+                reader = csv.DictReader(f)
+                for row in reader:
+                    if row['shape_id'] in shape_ids:
+                        shapes[row['shape_id']].append({
+                            "lat": float(row['shape_pt_lat']),
+                            "lng": float(row['shape_pt_lon']),
+                            "sequence": int(row['shape_pt_sequence'])
+                        })
+
+            # Sort each shape by sequence
+            for shape_id in shapes:
+                shapes[shape_id].sort(key=lambda x: x['sequence'])
+
+            # Return list of coordinates for all shapes (remove sequence)
+            result = {
+                "route_id": route_id,
+                "shapes": [{
+                    "shape_id": shape_id,
+                    "coordinates": [{"lat": pt["lat"], "lng": pt["lng"]} for pt in shapes[shape_id]]
+                } for shape_id in shapes]
+            }
+
+            # Cache results
+            cache.set(cache_key, result)
+            return result
+
+        except Exception as e:
+            return {"error": f"Failed to load shape data: {str(e)}"}
+
+    def get_stops_for_route(self, route_id):
+        """
+        Get all stops for a specific route
+
+        Args:
+            route_id (str): Route ID
+
+        Returns:
+            list: List of stops for the route
+        """
+        # Check cache
+        cache_key = f"route_stops_{route_id}"
+        cached_data = cache.get(cache_key, self.get_cache_timeout('route_stops', route_id))
+        if cached_data:
+            return cached_data
+
+        try:
+            # Process steps:
+            # 1. Get trips for this route from trips.txt
+            # 2. Extract trip_ids from trips
+            # 3. Get stops for each trip from stop_times.txt
+            # 4. Get stop details from stops.txt
+
+            trips_file = os.path.join('data', 'gtfs_subway', 'trips.txt')
+            stop_times_file = os.path.join('data', 'gtfs_subway', 'stop_times.txt')
+            stops_file = os.path.join('data', 'gtfs_subway', 'stops.txt')
+
+            # Get trip_ids for this route_id
+            trip_ids = set()
+            with open(trips_file, 'r', encoding='utf-8') as f:
+                reader = csv.DictReader(f)
+                for row in reader:
+                    if row['route_id'] == route_id:
+                        trip_ids.add(row['trip_id'])
+
+            if not trip_ids:
+                return {"error": f"No trips found for route: {route_id}"}
+
+            # Get stops for each trip
+            stop_ids = set()
+            with open(stop_times_file, 'r', encoding='utf-8') as f:
+                reader = csv.DictReader(f)
+                for row in reader:
+                    if row['trip_id'] in trip_ids:
+                        stop_ids.add(row['stop_id'])
+
+            # Get stop details
+            stops = []
+            with open(stops_file, 'r', encoding='utf-8') as f:
+                reader = csv.DictReader(f)
+                for row in reader:
+                    if row['stop_id'] in stop_ids:
+                        stop = {
+                            "id": row['stop_id'],
+                            "name": row['stop_name'],
+                            "lat": float(row['stop_lat']),
+                            "lng": float(row['stop_lon'])
+                        }
+                        stops.append(stop)
+
+            result = {
+                "route_id": route_id,
+                "stops": stops
+            }
+
+            # Cache results
+            cache.set(cache_key, result)
+            return result
+
+        except Exception as e:
+            return {"error": f"Failed to load stops for route: {str(e)}"}

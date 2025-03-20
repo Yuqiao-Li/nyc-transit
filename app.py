@@ -4,7 +4,6 @@ from api import create_routes
 
 
 def create_app():
-    """创建并配置Flask应用"""
     app = Flask(__name__)
 
     # 启用CORS

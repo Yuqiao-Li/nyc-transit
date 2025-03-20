@@ -5,21 +5,21 @@ import datetime
 
 def parse_gtfs_rt(content, feed_id):
     """
-    解析GTFS-RT数据
+    Parse GTFS-RT data
 
     Args:
-        content (bytes): GTFS-RT二进制内容
-        feed_id (str): 数据源ID
+        content (bytes): GTFS-RT binary content
+        feed_id (str): Feed ID
 
     Returns:
-        dict: 解析后的数据
+        dict: Parsed data
     """
     try:
-        # 解析GTFS-RT数据
+        # Parse GTFS-RT data
         feed = gtfs_realtime_pb2.FeedMessage()
         feed.ParseFromString(content)
 
-        # 转换为可JSON化的格式
+        # Convert to JSON-serializable format
         result = {
             "header": {
                 "timestamp": feed.header.timestamp,
@@ -29,11 +29,11 @@ def parse_gtfs_rt(content, feed_id):
             "entities": []
         }
 
-        # 处理每个实体(车辆、行程更新、提醒等)
+        # Process each entity (vehicle, trip update, alert)
         for entity in feed.entity:
             entity_data = {"id": entity.id}
 
-            # 处理车辆位置
+            # Process vehicle positions
             if entity.HasField('vehicle'):
                 vehicle = entity.vehicle
                 vehicle_data = {
@@ -67,7 +67,7 @@ def parse_gtfs_rt(content, feed_id):
 
                 entity_data["vehicle"] = vehicle_data
 
-            # 处理行程更新
+            # Process trip updates
             if entity.HasField('trip_update'):
                 trip_update = entity.trip_update
                 update_data = {
@@ -106,7 +106,7 @@ def parse_gtfs_rt(content, feed_id):
 
                 entity_data["trip_update"] = update_data
 
-            # 处理提醒
+            # Process alerts
             if entity.HasField('alert'):
                 alert = entity.alert
                 alert_data = {
@@ -120,7 +120,7 @@ def parse_gtfs_rt(content, feed_id):
                         0].text if alert.description_text.translation else None
                 }
 
-                # 处理有效期
+                # Process active periods
                 for period in alert.active_period:
                     period_data = {}
                     if period.HasField('start'):
@@ -139,7 +139,7 @@ def parse_gtfs_rt(content, feed_id):
 
                     alert_data["active_period"].append(period_data)
 
-                # 处理影响实体
+                # Process affected entities
                 for entity in alert.informed_entity:
                     entity_info = {}
                     if entity.HasField('agency_id'):
