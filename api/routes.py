@@ -88,7 +88,7 @@ def register_routes(bp):
        stops_data = data_service.get_stops_for_route(route_id)
        return jsonify(stops_data)
 
-   @bp.route('/line/<line_id>')  # 移除 /api 前缀
+   @bp.route('/line/<line_id>')
    def get_line(line_id):
        """Get line coordinates"""
        line_data = data_service.get_line(line_id)
