@@ -751,6 +751,103 @@ class DataService:
             print(traceback.format_exc())
             return {"error": f"Failed to load line data: {str(e)}"}
 
+    def get_station_route_map(self):
+        """
+        Get mapping between stations and routes
+
+        Returns:
+            dict: Mapping of station IDs to route IDs
+        """
+        # Check cache
+        cache_key = "station_route_map"
+        cached_data = cache.get(cache_key, 86400)  # Cache for 24 hours
+        if cached_data:
+            return cached_data
+
+        try:
+            stop_times_file = os.path.join('data', 'gtfs_subway', 'stop_times.txt')
+            trips_file = os.path.join('data', 'gtfs_subway', 'trips.txt')
+
+            # Create stop_id to trip_id mapping from stop_times.txt
+            stop_to_trips = {}
+            with open(stop_times_file, 'r', encoding='utf-8') as f:
+                reader = csv.DictReader(f)
+                for row in reader:
+                    stop_id = row['stop_id']
+                    trip_id = row['trip_id']
+                    if stop_id not in stop_to_trips:
+                        stop_to_trips[stop_id] = set()
+                    stop_to_trips[stop_id].add(trip_id)
+
+            # Create trip_id to route_id mapping from trips.txt
+            trip_to_route = {}
+            with open(trips_file, 'r', encoding='utf-8') as f:
+                reader = csv.DictReader(f)
+                for row in reader:
+                    trip_to_route[row['trip_id']] = row['route_id']
+
+            # Create stop_id to route_id mapping
+            station_route_map = {}
+            for stop_id, trips in stop_to_trips.items():
+                route_ids = set()
+                for trip_id in trips:
+                    if trip_id in trip_to_route:
+                        route_ids.add(trip_to_route[trip_id])
+                station_route_map[stop_id] = list(route_ids)
+
+            # Cache the result
+            cache.set(cache_key, station_route_map)
+            return station_route_map
+
+        except Exception as e:
+            return {"error": f"Failed to create station-route map: {str(e)}"}
+
+    def get_routes_for_station(self, station_id):
+        """
+        Get all routes serving a specific station with details
+
+        Args:
+            station_id (str): Station ID
+
+        Returns:
+            dict: Routes information for the station
+        """
+        # Get station-route mapping
+        mapping = self.get_station_route_map()
+        if "error" in mapping:
+            return mapping
+
+        if station_id not in mapping:
+            return {"error": "Station not found"}
+
+        route_ids = mapping[station_id]
+
+        # Get route details
+        routes = []
+        routes_file = os.path.join('data', 'gtfs_subway', 'routes.txt')
+
+        try:
+            with open(routes_file, 'r', encoding='utf-8') as f:
+                reader = csv.DictReader(f)
+                for row in reader:
+                    if row['route_id'] in route_ids:
+                        route = {
+                            "id": row['route_id'],
+                            "short_name": row['route_short_name'],
+                            "long_name": row['route_long_name'],
+                            "color": row.get('route_color', ''),
+                            "text_color": row.get('route_text_color', '')
+                        }
+                        routes.append(route)
+
+            return {
+                "station_id": station_id,
+                "routes": routes
+            }
+
+        except Exception as e:
+            return {"error": f"Failed to get routes for station: {str(e)}"}
+
 
     def get_stops_for_route(self, route_id):
         """

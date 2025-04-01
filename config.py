@@ -1,5 +1,14 @@
 """Application configuration"""
 
+# Database configuration
+SQLALCHEMY_DATABASE_URI = 'sqlite:///nyc_transit.db'  # Use SQLite for development
+SQLALCHEMY_TRACK_MODIFICATIONS = False
+
+# If password protection is needed, add a secret key
+SECRET_KEY = 'your-secret-key-here'  # Use environment variables in production
+
+
+
 # Data feed URLs
 SUBWAY_FEEDS = {
    'ace': 'https://api-endpoint.mta.info/Dataservice/mtagtfsfeeds/nyct%2Fgtfs-ace',

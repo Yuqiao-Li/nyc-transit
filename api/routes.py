@@ -1,11 +1,15 @@
 from flask import jsonify, request
 from services.data_service import DataService
+from flask import jsonify, request
 
+from services.user_service import UserService
+from flask_jwt_extended import JWTManager, jwt_required, create_access_token, get_jwt_identity
 
 def register_routes(bp):
 
-   # Initialize data service
+   # Initialize  service
    data_service = DataService()
+   user_service = UserService()
 
    @bp.route('/feeds')
    def list_feeds():
@@ -93,3 +97,70 @@ def register_routes(bp):
        """Get line coordinates"""
        line_data = data_service.get_line(line_id)
        return jsonify(line_data)
+
+   # user_service
+   @bp.route('/users/register', methods=['POST'])
+   def register_user():
+       """Register a new user"""
+       data = request.json
+       if not data or not all(k in data for k in ('username', 'email', 'password')):
+           return jsonify({"error": "Please provide username, email, and password"}), 400
+
+       user, error = user_service.create_user(data['username'], data['email'], data['password'])
+       if error:
+           return jsonify({"error": error}), 400
+
+       return jsonify({"message": "User registered successfully", "user_id": user.id}), 201
+
+   @bp.route('/users/login', methods=['POST'])
+   def login():
+       """User login"""
+       data = request.json
+       if not data or not all(k in data for k in ('username', 'password')):
+           return jsonify({"error": "Please provide username and password"}), 400
+
+       # Implement login logic
+       # Return JWT token
+       pass
+
+   @bp.route('/users/<int:user_id>/favorites/routes', methods=['GET'])
+
+   def get_favorite_routes(user_id):
+       """Get user's favorite routes"""
+       # Verify identity
+       current_user = get_jwt_identity()
+       if current_user != user_id:
+           return jsonify({"error": "Unauthorized access"}), 403
+
+       favorites = user_service.get_user_favorite_routes(user_id)
+       return jsonify([{
+           "id": fav.id,
+           "route_id": fav.route_id,
+           "added_at": fav.added_at.isoformat()
+       } for fav in favorites])
+
+   @bp.route('/users/<int:user_id>/favorites/routes', methods=['POST'])
+
+   def add_favorite_route(user_id):
+       """Add a favorite route"""
+       # Implement add favorite logic
+       pass
+
+   @bp.route('/station-route-map')
+   def get_station_route_map():
+       """Get mapping between stations and routes"""
+       mapping = data_service.get_station_route_map()
+       if "error" in mapping:
+           return jsonify(mapping), 500
+       return jsonify(mapping)
+
+   @bp.route('/stations/<station_id>/routes')
+   def get_routes_for_station(station_id):
+       """Get all routes serving a specific station"""
+       result = data_service.get_routes_for_station(station_id)
+       if "error" in result:
+           error_message = result["error"]
+           if error_message == "Station not found":
+               return jsonify(result), 404
+           return jsonify(result), 500
+       return jsonify(result)
